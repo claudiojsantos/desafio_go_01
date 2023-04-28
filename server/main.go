@@ -1,15 +1,14 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"time"
 
-	_ "github.com/mattn/go-sqlite"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 type Cotacao struct {
@@ -28,61 +27,61 @@ type Cotacao struct {
 	} `json:"USDBRL"`
 }
 
+type CotacaoBid struct {
+	Bid string `json:"bid"`
+}
+
 func main() {
 	http.HandleFunc("/cotacao", cotacaoHandler)
 	http.ListenAndServe(":8080", nil)
 }
 
-func cotacaoHandler(res http.ResponseWriter, req *http.Request) {
+func cotacaoHandler(resp http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
-	log.Println("Request iniciado")
-	defer log.Println("Request finalizado")
 	select {
 	case <-time.After(200 * time.Millisecond):
 		res, err := http.Get("https://economia.awesomeapi.com.br/json/last/USD-BRL")
-		if err != nil {
-			panic(err)
-		}
+		checkErr(err)
 		defer res.Body.Close()
 
 		body, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			panic(err)
-		}
+		checkErr(err)
 
 		var cotacao Cotacao
 		err = json.Unmarshal(body, &cotacao)
-		if err != nil {
-			panic(err)
-		}
+		checkErr(err)
 
 		saveCotacao(cotacao)
 
-		fmt.Println(cotacao.Usdbrl.Bid)
+		resp.Header().Set("Content-Type", "application/json")
 
-		// fmt.Println(string(body))
+		BidCotacao := CotacaoBid{Bid: cotacao.Usdbrl.Bid}
+		err = json.NewEncoder(resp).Encode(BidCotacao)
+		checkErr(err)
 	case <-ctx.Done():
-		http.Error(res, "Request canceelada", http.StatusRequestTimeout)
+		http.Error(resp, "Request canceelada", http.StatusRequestTimeout)
 	}
-
 }
 
 func saveCotacao(cotacao Cotacao) {
+	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+	defer cancel()
+
 	db, err := sql.Open("sqlite3", "./cotacao.db")
+	checkErr(err)
+
+	stmt, err := db.PrepareContext(ctx, "INSERT INTO cotacao (code, codein, name, high, low, varBid, pctChange, bid, ask, timestamp, createDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+	checkErr(err)
+
+	stmt.Exec(cotacao.Usdbrl.Code, cotacao.Usdbrl.Codein, cotacao.Usdbrl.Name, cotacao.Usdbrl.High, cotacao.Usdbrl.Low, cotacao.Usdbrl.VarBid, cotacao.Usdbrl.PctChange, cotacao.Usdbrl.Bid, cotacao.Usdbrl.Ask, cotacao.Usdbrl.Timestamp, cotacao.Usdbrl.CreateDate)
+
+	defer db.Close()
+}
+
+func checkErr(err error) {
 	if err != nil {
 		panic(err)
+		return
 	}
-
-	result, err := db.Exec("INSERT INTO cotacao (code, codein, name, high, low, varBid, pctChange, bid, ask, timestamp, createDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", cotacao.Usdbrl.Code, cotacao.Usdbrl.Codein, cotacao.Usdbrl.Name, cotacao.Usdbrl.High, cotacao.Usdbrl.Low, cotacao.Usdbrl.VarBid, cotacao.Usdbrl.PctChange, cotacao.Usdbrl.Bid, cotacao.Usdbrl.Ask, cotacao.Usdbrl.Timestamp, cotacao.Usdbrl.CreateDate)
-	if err != nil {
-		panic(err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		panic(err)
-	}
-
-	fmt.Println("inserido", rowsAffected, "linha(s)")
-
 }
